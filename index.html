@@ -18,7 +18,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:"Aria
 #app{position:fixed;inset:0}
 canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .hidden{display:none!important}
-.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:calc(var(--sa) + 14px) calc(var(--sr) + 14px) calc(var(--sb) + 14px) calc(var(--sl) + 14px);background:radial-gradient(ellipse at center,rgba(0,0,0,.15),rgba(0,0,0,.72));gap:12px}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:calc(var(--sa) + 14px) calc(var(--sr) + 14px) calc(var(--sb) + 14px) calc(var(--sl) + 14px);background:linear-gradient(rgba(5,8,18,.55),rgba(5,8,18,0) 32%,rgba(5,8,18,0) 52%,rgba(5,8,18,.62));gap:12px}
 .logo{font-size:min(15vw,78px);line-height:.88;text-align:center;font-style:italic;letter-spacing:-1px;text-transform:uppercase;text-shadow:0 4px 0 #000,0 0 30px rgba(255,80,0,.55)}
 .logo b{display:block;color:var(--y)}
 .logo i{display:block;color:var(--r);font-size:.62em;-webkit-text-stroke:0}
@@ -84,6 +84,9 @@ h2{margin:0;font-size:28px;font-style:italic;text-transform:uppercase;text-shado
 #stick{width:120px;height:120px;border-radius:50%;border:3px solid #fff7;background:#fff2;display:none;margin:-60px 0 0 -60px}
 #knob{position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px;border-radius:50%;background:#fffc;box-shadow:0 2px 6px #000a}
 #flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+#vig{position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 45%,rgba(0,0,0,0) 52%,rgba(8,10,20,.42) 100%),linear-gradient(rgba(255,160,60,.05),rgba(40,60,120,.07))}
+#speed{position:absolute;inset:-20%;pointer-events:none;opacity:0;background:repeating-conic-gradient(from 0deg at 50% 52%,rgba(255,255,255,0) 0 3deg,rgba(255,255,255,.55) 3.2deg 3.5deg,rgba(255,255,255,0) 3.8deg 7deg);-webkit-mask-image:radial-gradient(circle at 50% 52%,transparent 28%,#000 75%);mask-image:radial-gradient(circle at 50% 52%,transparent 28%,#000 75%);animation:spd .22s steps(2) infinite}
+@keyframes spd{50%{transform:rotate(1.6deg) scale(1.03)}}
 #tally{left:0;right:0;top:34%;text-align:center;font-style:italic;font-size:min(9vw,36px);text-shadow:0 4px 0 #000}
 #tally b{display:block;font-size:min(16vw,70px);color:var(--y)}
 #toast{left:0;right:0;top:28%;text-align:center;font-size:min(7vw,30px);font-style:italic;color:#fff;text-shadow:0 3px 0 var(--r),0 0 20px #000}
@@ -98,6 +101,8 @@ h2{margin:0;font-size:28px;font-style:italic;text-transform:uppercase;text-shado
 <body>
 <div id="app">
   <canvas id="c"></canvas>
+  <div id="speed"></div>
+  <div id="vig"></div>
   <div id="flash"></div>
 
   <div id="hud" class="hidden">

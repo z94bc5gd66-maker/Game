@@ -13,3 +13,12 @@ npm install
 npm run build   # bündelt src/ -> game.js
 python3 -m http.server   # dann http://localhost:8000
 ```
+
+## Look & Feel
+- Karosserien als geglättete Loft-Meshes (Fenster/Säulen/Streifen per Vertex-Farbe), PBR-Lack mit Env-Map
+- Schadens-Shader: Dellen, Stauchung, Verbrennungen pro Auto
+- Dynamische Kamera: Hero-Cam beim Zielen, Chase-Cam beim Launch (FOV-Kick, Speed-Lines), Overhead-Action-Cam,
+  Crashbreaker-Cinematic, Verdeckungs-Check gegen Gebäude, Shake/Roll/Zoom-Punch bei Treffern
+- VFX: Feuerball + Schockwelle + Punktlicht, Rauchsäulen, Funken, Glassplitter, abfliegende Räder, Reifenspuren,
+  Brandflecken, Rücklicht-/Ampel-Glow, Schatten (adaptiv abschaltbar)
+- `?hq` in der URL erzwingt Schatten & volle Auflösung

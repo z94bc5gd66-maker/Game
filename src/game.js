@@ -1,14 +1,15 @@
 import * as THREE from 'three';
 import { LEVELS } from './levels.js';
 import { buildWorld, disposeGroup } from './world.js';
-import { TYPES, PLAYER_MODELS, PLAYER_COLORS, TRAFFIC_COLORS, createCarMesh, circlesFor } from './models.js';
+import { TYPES, PLAYER_MODELS, PLAYER_COLORS, TRAFFIC_COLORS, createCarMesh, circlesFor, setCarEnv } from './models.js';
+import { makeEnv } from './env.js';
 import { FX } from './fx.js';
 import { initAudio, resumeAudio, sfx, setMuted, isMuted } from './audio.js';
 import { clamp, lerp, rand, pick, wpick, fmt } from './util.js';
 
 const $ = (id) => document.getElementById(id);
 const G = 24;
-const MAX_CARS = 78;
+const MAX_CARS = 84;
 
 /* ------------------------------------------------------------------ save */
 const SAVE_KEY = 'crashjunction.v1';
@@ -22,14 +23,40 @@ const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: window.devicePixelRatio < 2, powerPreference: 'high-performance' });
 let dpr = Math.min(window.devicePixelRatio || 1, 1.75);
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8ec5ff);
-scene.fog = new THREE.Fog(0x8ec5ff, 170, 380);
+scene.fog = new THREE.Fog(0xd2e0f2, 160, 420);
 const FOV = 42;
-const camera = new THREE.PerspectiveCamera(FOV, 1, 1, 700);
-scene.add(new THREE.HemisphereLight(0xdcebff, 0x6c6f78, 1.0));
-const sun = new THREE.DirectionalLight(0xfff0d0, 1.25);
-sun.position.set(-40, 90, 30);
-scene.add(sun);
+const camera = new THREE.PerspectiveCamera(FOV, 1, 0.5, 900);
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.0;
+const HQ = location.search.includes('hq');
+const LOWEND = !HQ && ((navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 4) <= 2);
+let shadowsOn = !LOWEND;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+const ENV = makeEnv(renderer);
+setCarEnv(ENV);
+scene.environment = ENV;
+scene.environmentIntensity = 0.4;
+scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x70727a, 0.55));
+const SUN_DIR = new THREE.Vector3(-45, 70, 38).normalize();
+const sun = new THREE.DirectionalLight(0xffe0b0, 3.1);
+sun.castShadow = shadowsOn;
+sun.shadow.mapSize.set(LOWEND ? 1024 : 1536, LOWEND ? 1024 : 1536);
+Object.assign(sun.shadow.camera, { left: -48, right: 48, top: 48, bottom: -48, near: 20, far: 260 });
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.06;
+scene.add(sun, sun.target);
+const sky = new THREE.Mesh(new THREE.SphereGeometry(600, 24, 12), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { sd: { value: SUN_DIR } },
+  vertexShader: 'varying vec3 vP; void main(){ vP=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `varying vec3 vP; uniform vec3 sd; void main(){ float h=clamp(vP.y,0.0,1.0);
+    vec3 hor=vec3(0.82,0.88,0.95), top=vec3(0.16,0.4,0.8); vec3 c=mix(hor,top,pow(h,0.5));
+    float s=max(dot(vP,sd),0.0); c+=vec3(1.0,0.82,0.55)*(pow(s,64.0)*1.2+pow(s,8.0)*0.28);
+    float cl=smoothstep(0.55,0.8,sin(vP.x*9.0+sin(vP.z*7.0)*1.5)*sin(vP.z*6.0+vP.x*3.0)*0.5+0.5)*smoothstep(0.08,0.3,h)*smoothstep(0.7,0.3,h);
+    c=mix(c,vec3(1.0),cl*0.35); gl_FragColor=vec4(c,1.0); }`,
+}));
+sky.renderOrder = -10; sky.frustumCulled = false;
+scene.add(sky);
 const fx = new FX(scene);
 
 function resize() {
@@ -38,7 +65,7 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  fx.setScale((h * dpr) / (2 * Math.tan((FOV * Math.PI) / 360)));
+  fx.setScale((h * dpr) / (2 * Math.tan((camera.fov * Math.PI) / 360)));
 }
 window.addEventListener('resize', resize);
 resize();
@@ -50,6 +77,8 @@ const S = {
   t: 0, lightT: 0, paused: false, slowT: 0, ts: 1, shake: 0, aim: 0, gaugeT: 0, power: 0, after: 1, afterMax: 3,
   breakReady: false, timeSince: 0, quiet: 0, phaseT: 0, nid: 1, focus: new THREE.Vector3(), zoomW: 90, lampState: {},
   stick: { active: false, id: -1, ox: 0, oy: 0, x: 0, y: 0, mag: 0 }, orbit: 0, wrecks: 0, showcase: null, bigHit: false,
+  fovKick: 0, roll: 0, punch: 0, chaseT: 0, cine: 0, cineX: 0, cineZ: 0, speedFx: 0, camSnap: true, viewShift: 0,
+  cam: { fx: 0, fz: 0, dist: 80, el: 58, az: 0, fov: 42, lookY: 0 },
 };
 const lvl = () => LEVELS[S.li];
 
@@ -57,7 +86,7 @@ const lvl = () => LEVELS[S.li];
 const ui = {
   hud: $('hud'), score: $('score'), goal: $('goal'), mult: $('mult'), chainbar: $('chainbar').firstElementChild, after: $('after').firstElementChild,
   hint: $('hint'), toast: $('toast'), tally: $('tally'), gauge: $('gauge'), launch: $('launchBtn'), stop: $('stopBtn'), brk: $('breakBtn'),
-  cars: $('cars'), name: $('lvlName'), pops: $('pops'), flash: $('flash'), stick: $('stick'), knob: $('knob'),
+  cars: $('cars'), name: $('lvlName'), pops: $('pops'), flash: $('flash'), speed: $('speed'), stick: $('stick'), knob: $('knob'),
 };
 const screens = { title: $('title'), levels: $('levels'), garage: $('garage'), pause: $('pause'), results: $('results') };
 function showScreen(n) {
@@ -83,7 +112,7 @@ function pop(x, z, text, cls = '') {
 let toastT = 0;
 function toast(t, ms = 1400) { ui.toast.textContent = t; ui.toast.style.opacity = 1; toastT = ms / 1000; }
 function vibrate(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* ignore */ } }
-function flash(a = 0.8) { ui.flash.style.transition = 'none'; ui.flash.style.opacity = a; void ui.flash.offsetWidth; ui.flash.style.transition = 'opacity .5s'; ui.flash.style.opacity = 0; }
+function flash(a = 0.8, col = '#fff') { ui.flash.style.background = col; ui.flash.style.transition = 'none'; ui.flash.style.opacity = a; void ui.flash.offsetWidth; ui.flash.style.transition = 'opacity .5s'; ui.flash.style.opacity = 0; }
 
 /* -------------------------------------------------------------- level mgmt */
 function clearLevel() {
@@ -105,6 +134,8 @@ function loadLevel(i) {
     l.target = Math.max(1, Math.round(l.len / (S.L.density + rand(-1, 3))));
     l.spawnCd = 0;
   }
+  const tot = S.world.lanes.reduce((n, l) => n + l.target, 0), cap = LOWEND ? 50 : 70;
+  if (tot > cap) for (const l of S.world.lanes) l.target = Math.max(1, Math.round((l.target * cap) / tot));
   populateTraffic();
   for (let k = 0; k < 150; k++) { S.lightT += 1 / 30; updateRails(1 / 30); }
   spawnPickups();
@@ -141,7 +172,7 @@ function newCar(type, hex) {
     ...m, type, x: 0, z: 0, a: 0, vx: 0, vz: 0, w: 0, y: 0, vy: 0, pitch: 0, roll: 0, wp: 0, wr: 0, dmg: 0,
     mass, I: (mass * (T.L * T.L + T.W * T.W)) / 12, rad: T.L / 2 + 0.4, cr: cs.r, offs: cs.offs,
     rail: null, p: 0, speed: 0, v0: 0, counted: false, player: false, fire: 0, fuse: -1, gone: false, id: S.nid++,
-    lastCash: 0, onFire: false, fireT: 0, boomed: false, smokeT: 0,
+    lastCash: 0, onFire: false, fireT: 0, boomed: false, smokeT: 0, bob: 0, braking: false, acc: 0, skidD: 0, wheelsLost: 0, lastSk: 0,
   };
   scene.add(c.root);
   S.cars.push(c);
@@ -162,14 +193,11 @@ function unrail(c) {
 function syncCar(c) {
   c.root.position.set(c.x, 0, c.z);
   c.root.rotation.y = -c.a;
-  c.pivot.position.y = c.H / 2 + c.y;
+  c.pivot.position.y = c.H / 2 + c.y + c.bob;
   c.pivot.rotation.set(c.roll, 0, c.pitch);
-  const d = c.dmg;
-  c.body.scale.set(1 - 0.1 * d, 1 - 0.26 * d, 1);
-  c.mat.color.setScalar(1 - 0.6 * d);
-  const sh = 1 + c.y * 0.12;
-  c.shadow.scale.set(c.T.L * 1.25 * sh, 1, c.T.W * 1.7 * sh);
-  c.shadow.material.opacity = 1;
+  c.mat.userData.dmg.value = c.dmg;
+  c.shadow.visible = !shadowsOn;
+  if (!shadowsOn) { const sh = 1 + c.y * 0.12; c.shadow.scale.set(c.T.L * 1.25 * sh, 1, c.T.W * 1.7 * sh); }
 }
 
 /* ---------------------------------------------------------------- lights */
@@ -217,7 +245,17 @@ function updateRails(dt) {
         target = Math.min(target, lead.speed + Math.sqrt(2 * 9 * Math.max(gap, 0)));
         if (gap < 0.2) target = Math.min(target, lead.speed * 0.85);
       }
+      const old = c.speed;
       if (c.speed < target) c.speed = Math.min(target, c.speed + 6 * dt); else c.speed = Math.max(target, c.speed - 16 * dt);
+      c.acc = (c.speed - old) / dt;
+      c.braking = c.acc < -1.2 || (c.speed < 0.6 && target < 0.6);
+      c.pitch += (clamp(c.acc * 0.0032, -0.05, 0.04) - c.pitch) * Math.min(1, dt * 7);
+      c.bob = Math.sin(S.t * 9 + c.id) * 0.012 * Math.min(1, c.speed / 10);
+      if (c.acc < -11 && c.speed > 3 && S.t - c.lastSk > 0.07) {
+        c.lastSk = S.t;
+        const hx = Math.cos(c.a), hz = Math.sin(c.a);
+        for (const sg of [-1, 1]) fx.skid(c.x - hx * c.T.L * 0.25 - hz * sg * c.T.W * 0.36, c.z - hz * c.T.L * 0.25 + hx * sg * c.T.W * 0.36, c.a, 1.6, 0.24);
+      }
       c.p += c.speed * dt;
       placeRail(c);
       if (c.p > l.len + c.T.L) { cars.splice(i, 1); c.root.visible = false; c.rail = l; l.waiting.push(c); }
@@ -305,7 +343,8 @@ function explode(x, z, R, power, src) {
   fx.explosion(x, z, R);
   sfx.boom(R / 10);
   S.shake = Math.max(S.shake, Math.min(1.6, 0.6 + R / 14));
-  if (R >= 8) { S.slowT = 0.7; flash(0.55); vibrate([40, 30, 80]); }
+  if (R >= 8) { S.slowT = 0.7; flash(0.6, '#ffd9a0'); vibrate([40, 30, 80]); S.punch = 1; S.fovKick = Math.max(S.fovKick, 10); S.roll = (Math.random() - 0.5) * 0.09; }
+  else S.punch = Math.max(S.punch, 0.5);
   for (const c of S.cars) {
     if (c.gone || c === src || !c.root.visible) continue;
     const dx = c.x - x, dz = c.z - z, d = Math.hypot(dx, dz);
@@ -348,7 +387,7 @@ function crashBreaker() {
   bumpChain(3);
   pop(p.x, p.z, 'CRASHBREAKER!', 'fire');
   explode(p.x, p.z, R, 40, p);
-  S.zoomW = Math.max(S.zoomW, 52);
+  S.cine = 1.25; S.cineX = p.x; S.cineZ = p.z;
   ui.brk.classList.remove('ready');
 }
 
@@ -373,7 +412,11 @@ function impact(a, b, vn, px, pz) {
       }
     }
   }
-  if (vn > 8) fx.debrisBurst(px, 0.8, pz, 0, 0, Math.min(5, (vn / 4) | 0), a.player ? save.color : '#999', vn * 0.5);
+  if (vn > 8) fx.debrisBurst(px, 0.8, pz, 0, 0, Math.min(5, (vn / 4) | 0), a.player ? save.color : (a.hex || '#999'), vn * 0.5);
+  if (vn > 5) fx.glassBurst(px, 1.1, pz, (a.vx + b.vx) * 0.5, (a.vz + b.vz) * 0.5, Math.min(9, (vn * 0.7) | 0));
+  if (vn > 11) for (const c of [a, b]) if (!c.static && c.wheelsLost < 2 && Math.random() < 0.28) { c.wheelsLost++; fx.wheelBurst(c.x, c.y, c.z, c.vx, c.vz, 1); }
+  if (a.player || b.player) { S.fovKick = Math.max(S.fovKick, k * 8); S.roll = (Math.random() - 0.5) * k * 0.07; S.punch = Math.max(S.punch, k); if (vn > 9 && S.chaseT > 0.9) S.chaseT = 0.9; }
+  else if (vn > 10) S.punch = Math.max(S.punch, k * 0.45);
   if (vn > 3.2) {
     for (const c of [a, b]) if (!c.static && !c.counted && !c.player) wreck(c);
     if (a.player || b.player) { if (!S.breakReady && S.phase === 'crash') { S.breakReady = true; ui.brk.classList.add('ready'); toast('CRASHBREAKER BEREIT!', 900); } }
@@ -490,6 +533,16 @@ function integrate(c, dt) {
     if (sp > 0) { const d = Math.max(0, sp - (flipped ? 3.5 : 1.6) * dt) / sp; vf *= d; vl *= d; }
     c.vx = hx * vf - hz * vl; c.vz = hz * vf + hx * vl;
     c.w *= Math.exp(-1.7 * dt);
+    if (sp > 4 && (Math.abs(vl) > 2.4 || (flipped && sp > 5))) {
+      c.skidD += sp * dt;
+      if (c.skidD > 0.9) {
+        c.skidD = 0;
+        const ang = Math.atan2(c.vz, c.vx), qx = -Math.sin(ang), qz = Math.cos(ang);
+        if (!flipped) for (const sg of [-1, 1]) fx.skid(c.x + qx * sg * c.T.W * 0.38 - hx * c.T.L * 0.3, c.z + qz * sg * c.T.W * 0.38 - hz * c.T.L * 0.3, ang, 1.5, 0.26);
+        else { fx.skid(c.x, c.z, ang, 1.8, 0.7); fx.spark(c.x, 0.3, c.z, 3, 6); }
+        if (Math.random() < 0.5) fx.smokePuff(c.x, 0.3, c.z, 0.8, 0.16);
+      }
+    }
     // align heading to velocity when driving freely (undamaged skid)
     if (!flipped && c.player && sp > 3) {
       const tgt = Math.atan2(c.vz, c.vx);
@@ -506,7 +559,8 @@ function aftertouch(dt) {
   const p = S.player, st = S.stick;
   if (!p || p.gone || !st.active || S.after <= 0 || S.phase !== 'crash') return;
   const f = 36 * st.mag;
-  p.vx += st.x * f * dt; p.vz += st.y * f * dt;
+  const ca = Math.cos(S.cam.az), sa = Math.sin(S.cam.az);
+  p.vx += (ca * st.x + sa * st.y) * f * dt; p.vz += (-sa * st.x + ca * st.y) * f * dt;
   S.after = Math.max(0, S.after - (dt * st.mag) / S.afterMax);
   if (p.y < 0.01 && Math.random() < 0.3) fx.spark(p.x, 0.2, p.z, 1, 3);
 }
@@ -559,6 +613,7 @@ function prepareAim() {
   p.player = true; p.counted = true; p.mass *= 1 + 0.07 * save.up.power; p.I *= 1 + 0.07 * save.up.power;
   p.x = w.start.x; p.z = w.start.z; p.y = 0.7; p.a = aimHeading();
   S.player = p; S.aim = 0; p.a = aimHeading();
+  S.chaseT = 0; S.cine = 0; S.camSnap = false;
   S.phase = 'aim'; S.breakReady = false; S.crashScore = 0; S.bigHit = false; S.timeSince = 0; S.quiet = 0;
   S.after = 1; S.afterMax = 2.6 * (1 + 0.28 * save.up.after);
   S.chain = 0; S.mult = 1;
@@ -599,6 +654,8 @@ function doLaunch() {
   document.querySelector('#after').style.display = document.querySelector('#afterLbl').style.display = '';
   ui.hint.textContent = 'FINGER ZIEHEN = AFTERTOUCH';
   setTimeout(() => { if (S.phase === 'crash' && ui.hint.textContent.startsWith('FINGER')) ui.hint.textContent = ''; }, 3500);
+  S.chaseT = 2.4; S.fovKick = 6;
+  fx.tireSmoke(p.x, p.z, p.vx, p.vz, 14); fx.spark(p.x, 0.6, p.z, 14, 9);
   sfx.launch(); vibrate(25);
 }
 
@@ -634,6 +691,7 @@ function startLevel(i) {
   const g = S.L.goals[2];
   ui.goal.children[1].style.left = (S.L.goals[0] / g) * 100 + '%'; ui.goal.children[2].style.left = (S.L.goals[1] / g) * 100 + '%';
   prepareAim();
+  S.camSnap = true;
 }
 
 function renderCars() {
@@ -676,6 +734,7 @@ function toMenu(screen = 'title') {
   if (wasPlay || !S.world || S.li !== (save.last || 0)) loadLevel(Math.min(save.last || 0, LEVELS.length - 1));
   if (S.showcase && screen !== 'garage') { scene.remove(S.showcase.root); S.cars = S.cars.filter((c) => c !== S.showcase); S.showcase = null; }
   showScreen(screen);
+  if (S.world) S.world.ramp.visible = screen !== 'garage';
   if (screen === 'levels') renderLevels();
   if (screen === 'garage') { renderGarage(); makeShowcase(); }
   $('titleMoney').textContent = fmt(save.money);
@@ -764,48 +823,125 @@ function updateArrow() {
 }
 
 /* --------------------------------------------------------------- camera */
-const camPos = new THREE.Vector3();
-function updateCamera(dt, rdt) {
-  let tx = S.focus.x, tz = S.focus.z, W = S.zoomW, el = 60;
+const aLerp = (a, b, t) => { let d = b - a; d = Math.atan2(Math.sin(d), Math.cos(d)); return a + d * t; };
+const distForW = (W, fov) => { const tv = Math.tan((fov * Math.PI) / 360), th = tv * camera.aspect; return Math.max(W / 2 / th, (W * 0.85) / 2 / tv); };
+const TG = { fx: 0, fz: 0, dist: 80, el: 58, az: 0, fov: 42, lookY: 0, rate: 2.5 };
+const OV = { fx: 0, fz: 0, dist: 80, el: 58, az: 0, fov: 42, lookY: 0 };
+function overheadTarget(T) {
+  const p = S.player;
+  let sx = 0, sz = 0, n = 0;
+  if (p && !p.gone) { sx = p.x; sz = p.z; n = 1; }
+  for (const c of S.free) { if (c.gone || c === p) continue; const sp = Math.hypot(c.vx, c.vz); if (sp > 4 || c.fuse > 0) { sx += c.x * 0.6; sz += c.z * 0.6; n += 0.6; } }
+  if (n > 0) { T.fx = sx / n; T.fz = sz / n; } else { T.fx = S.cam.fx; T.fz = S.cam.fz; }
+  T.dist = distForW(S.phase === 'tally' ? 66 : 50, 42); T.el = 58; T.az = 0; T.fov = 42; T.lookY = 0;
+}
+// first parametric hit (0..1) of a segment with any building box, 2 = free
+function segHit(x0, y0, z0, x1, y1, z1) {
+  const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0, M = 1.6;
+  let best = 2;
+  for (const b of S.world.colliders) {
+    if (!b.h) continue;
+    let tmin = 0, tmax = 1, ok = true;
+    const axes = [[x0, dx, b.minx - M, b.maxx + M], [y0, dy, 0, b.h], [z0, dz, b.minz - M, b.maxz + M]];
+    for (const [o, d, lo, hi] of axes) {
+      if (Math.abs(d) < 1e-6) { if (o < lo || o > hi) { ok = false; break; } continue; }
+      let t1 = (lo - o) / d, t2 = (hi - o) / d;
+      if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+      if (t1 > tmin) tmin = t1;
+      if (t2 < tmax) tmax = t2;
+      if (tmin > tmax) { ok = false; break; }
+    }
+    if (ok && tmin < best) best = tmin;
+  }
+  return best;
+}
+// lift / pull the camera until the view of the focus point is not blocked by a building
+function clearView(T) {
+  if (!S.world) return;
+  const base = T.el, d = T.dist;
+  let lastT = 2;
+  for (const add of [0, 10, 20, 32, 46]) {
+    const el = Math.min(76, base + add), e = (el * Math.PI) / 180;
+    const cx = T.fx + Math.sin(T.az) * Math.cos(e) * d, cy = Math.sin(e) * d, cz = T.fz + Math.cos(T.az) * Math.cos(e) * d;
+    lastT = segHit(T.fx, T.lookY + 0.6, T.fz, cx, cy, cz);
+    if (lastT > 1) { T.el = el; return; }
+  }
+  T.el = Math.min(76, base + 46);
+  T.dist = d * Math.max(0.3, lastT - 0.08);
+}
+function computeCamTarget(rdt) {
+  const T = TG; T.rate = 2.6; T.lookY = 0;
   if (S.mode === 'menu') {
-    S.orbit += rdt * 0.08;
+    S.orbit += rdt * 0.07;
     const garage = !screens.garage.classList.contains('hidden');
     if (garage && S.world) {
-      tx = S.world.start.x; tz = S.world.start.z + 10; W = 15; el = 32;
-      if (S.showcase) { S.showcase.a += rdt * 0.7; syncCar(S.showcase); }
-      const k = Math.min(1, rdt * 4); S.focus.x += (tx - S.focus.x) * k; S.focus.z += (tz - S.focus.z) * k;
-      S.curW = lerp(S.curW || 60, W, k);
-      place(S.focus.x, S.focus.z, S.curW, el, 0);
-      return;
+      T.fx = S.world.start.x; T.fz = S.world.start.z; T.fov = 34; T.dist = 8.5; T.el = 15; T.az = -0.55 + Math.sin(S.orbit * 3) * 0.25; T.lookY = 0.8; T.rate = 3;
+      S.viewShiftT = 0.4;
+    } else {
+      T.fx = 0; T.fz = 0; T.fov = 38; T.az = S.orbit; T.el = 34 + Math.sin(S.orbit * 0.7) * 5; T.dist = distForW(70, 38); T.lookY = 0; T.rate = 1.2;
+      S.viewShiftT = 0;
     }
-    S.focus.x += (0 - S.focus.x) * Math.min(1, rdt * 2); S.focus.z += (0 - S.focus.z) * Math.min(1, rdt * 2);
-    S.curW = lerp(S.curW || 60, 74, Math.min(1, rdt * 2));
-    place(S.focus.x, S.focus.z, S.curW, 54, Math.sin(S.orbit) * 1.1);
-    return;
+    return T;
   }
+  S.viewShiftT = 0;
+  const p = S.player;
   if (S.phase === 'aim' || S.phase === 'power') {
-    const w = S.world.start; tx = (w.x * 0.55); tz = (w.z * 0.55); W = S.L.view;
-  } else {
-    const p = S.player;
-    let sx = 0, sz = 0, n = 0;
-    if (p && !p.gone) { sx = p.x; sz = p.z; n = 1; }
-    for (const c of S.free) { if (c.gone || c === p) continue; const sp = Math.hypot(c.vx, c.vz); if (sp > 4 || c.fuse > 0) { sx += c.x * 0.6; sz += c.z * 0.6; n += 0.6; } }
-    if (n > 0) { tx = sx / n; tz = sz / n; } else { tx = S.focus.x; tz = S.focus.z; }
-    W = (S.phase === 'tally' ? 66 : 48);
+    const h = aimHeading();
+    T.az = Math.atan2(-Math.cos(h), -Math.sin(h));
+    T.fx = p.x + Math.cos(h) * 11; T.fz = p.z + Math.sin(h) * 11;
+    T.el = 33; T.dist = 40; T.lookY = 0.5; T.rate = 3.2;
+    T.fov = 46 - (S.phase === 'power' ? (S.needle || 0) * 9 : 0);
+    return T;
   }
-  const k = Math.min(1, rdt * (S.phase === 'crash' ? 3.2 : 2.2));
-  S.focus.x += (tx - S.focus.x) * k; S.focus.z += (tz - S.focus.z) * k;
-  S.curW = lerp(S.curW || W, W, Math.min(1, rdt * 1.6));
-  place(S.focus.x, S.focus.z, S.curW, 58, 0);
+  overheadTarget(OV);
+  let c = 0;
+  if (S.phase === 'crash' && p && !p.gone) c = clamp(S.chaseT / 0.9, 0, 1);
+  S.chaseT -= rdt;
+  c = c * c * (3 - 2 * c);
+  if (c > 0.001) {
+    const sp = Math.hypot(p.vx, p.vz), ang = sp > 2 ? Math.atan2(p.vz, p.vx) : p.a;
+    const cz = { fx: p.x + Math.cos(ang) * 8, fz: p.z + Math.sin(ang) * 8, az: Math.atan2(-Math.cos(ang), -Math.sin(ang)), dist: 25, el: 25, fov: 48 + Math.min(14, sp * 0.3), lookY: 1.1 };
+    T.fx = lerp(OV.fx, cz.fx, c); T.fz = lerp(OV.fz, cz.fz, c); T.dist = lerp(OV.dist, cz.dist, c); T.el = lerp(OV.el, cz.el, c);
+    T.fov = lerp(OV.fov, cz.fov, c); T.lookY = lerp(OV.lookY, cz.lookY, c); T.az = aLerp(OV.az, cz.az, c); T.rate = 4.5;
+    S.speedFx = c * clamp((sp - 20) / 28, 0, 1);
+  } else { Object.assign(T, OV); T.rate = 3; S.speedFx = 0; }
+  if (S.cine > 0) {
+    S.cine -= rdt;
+    T.fx = S.cineX; T.fz = S.cineZ; T.dist = distForW(30, 38); T.el = 30; T.az = 0.6 + (1.25 - S.cine) * 0.7; T.fov = 38; T.lookY = 1.5; T.rate = 6;
+  }
+  return T;
 }
-function place(fxp, fzp, W, elDeg, az) {
-  const tv = Math.tan((FOV * Math.PI) / 360), th = tv * camera.aspect;
-  const d = Math.max(W / 2 / th, (W * 0.85) / 2 / tv);
-  const el = (elDeg * Math.PI) / 180;
-  const sx = (Math.random() - 0.5) * S.shake * 1.6, sz = (Math.random() - 0.5) * S.shake * 1.6;
-  camPos.set(fxp + Math.sin(az) * Math.cos(el) * d + sx, Math.sin(el) * d, fzp + Math.cos(az) * Math.cos(el) * d + sz);
-  camera.position.copy(camPos);
-  camera.lookAt(fxp + sx * 0.5, 0, fzp + sz * 0.5);
+function updateCamera(dt, rdt) {
+  const T = computeCamTarget(S.paused ? 0 : rdt), C = S.cam;
+  clearView(T);
+  if (S.camSnap) { Object.assign(C, T); S.camSnap = false; }
+  const k = (r) => 1 - Math.exp(-r * rdt), r = T.rate;
+  C.fx += (T.fx - C.fx) * k(r); C.fz += (T.fz - C.fz) * k(r);
+  C.dist += (T.dist - C.dist) * k(r * 0.8); C.el += (T.el - C.el) * k(r * 0.9);
+  C.az = aLerp(C.az, T.az, k(r)); C.fov += (T.fov - C.fov) * k(r * 1.3); C.lookY += (T.lookY - C.lookY) * k(r);
+  S.fovKick *= Math.exp(-6 * rdt); S.punch *= Math.exp(-5 * rdt); S.roll *= Math.exp(-4 * rdt);
+  const d = C.dist * (1 - S.punch * 0.1), el = (C.el * Math.PI) / 180;
+  const sx = (Math.random() - 0.5) * S.shake * 1.5, sz = (Math.random() - 0.5) * S.shake * 1.5, sy = (Math.random() - 0.5) * S.shake;
+  camera.position.set(C.fx + Math.sin(C.az) * Math.cos(el) * d + sx, Math.sin(el) * d + sy, C.fz + Math.cos(C.az) * Math.cos(el) * d + sz);
+  camera.up.set(0, 1, 0);
+  camera.lookAt(C.fx + sx * 0.4, C.lookY, C.fz + sz * 0.4);
+  camera.rotateZ(S.roll);
+  const fov = C.fov + S.fovKick;
+  S.viewShift += ((S.viewShiftT || 0) - S.viewShift) * k(5);
+  if (Math.abs(fov - camera.fov) > 0.04 || Math.abs(S.viewShift - (S.vsApplied || 0)) > 0.001) {
+    camera.fov = fov;
+    const w = window.innerWidth, h = window.innerHeight;
+    if (S.viewShift > 0.002) camera.setViewOffset(w, h, 0, h * S.viewShift, w, h); else camera.clearViewOffset();
+    S.vsApplied = S.viewShift;
+    camera.updateProjectionMatrix();
+    fx.setScale((h * dpr) / (2 * Math.tan((camera.fov * Math.PI) / 360)));
+  }
+  sky.position.copy(camera.position);
+  // sun + shadow frustum follow the action
+  const fxp = Math.round(C.fx / 2) * 2, fzp = Math.round(C.fz / 2) * 2;
+  sun.position.set(fxp + SUN_DIR.x * 130, SUN_DIR.y * 130, fzp + SUN_DIR.z * 130);
+  sun.target.position.set(fxp, 0, fzp);
+  ui.speed.style.opacity = S.speedFx * 0.85;
 }
 
 /* --------------------------------------------------------------- input */
@@ -863,6 +999,31 @@ window.addEventListener('keydown', (e) => {
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && S.mode === 'play' && S.phase !== 'results' && !S.paused) { S.paused = true; showScreen('pause'); ui.hud.classList.remove('hidden'); } });
 
+/* ----------------------------------------------------------------- glows */
+const LAMP_COL = { green: [0.2, 1, 0.45], yellow: [1, 0.75, 0.1], red: [1, 0.12, 0.1] };
+function updateGlows() {
+  const g = fx.glow; g.begin();
+  for (const c of S.cars) {
+    if (!c.root.visible || c.gone || c.showcase) continue;
+    const f = 1 - c.dmg;
+    if (f < 0.12) continue;
+    const flick = c.dmg > 0.4 ? (Math.sin(S.t * 38 + c.id * 3) > -0.2 ? 1 : 0.15) : 1;
+    const hx = Math.cos(c.a), hz = Math.sin(c.a), qx = -hz, qz = hx, L2 = c.T.L / 2, wz = c.T.W * 0.3, y = 0.75 + c.y;
+    const br = c.braking;
+    for (const sg of [-1, 1]) {
+      g.add(c.x + hx * L2 + qx * sg * wz, y, c.z + hz * L2 + qz * sg * wz, 1.2, 1, 0.94, 0.72, 0.6 * f * flick);
+      g.add(c.x - hx * L2 + qx * sg * wz, y, c.z - hz * L2 + qz * sg * wz, br ? 1.7 : 0.8, 1, 0.07, 0.06, (br ? 0.9 : 0.5) * f * flick);
+    }
+    if (c.type === 'police') { const ph = Math.sin(S.t * 12 + c.id) > 0; g.add(c.x, 2.0 + c.y, c.z, 3.4, ph ? 1 : 0.15, 0.1, ph ? 0.1 : 1, 0.85); }
+  }
+  const w = S.world;
+  if (w) {
+    for (const p of w.poles) { const st = S.lampState[p.group]; if (!st) continue; const c = LAMP_COL[st]; g.add(p.x, p.y, p.z, 2.0, c[0], c[1], c[2], 0.75); }
+    for (const h of w.lampHeads) g.add(h.x, h.y, h.z, 2.2, 1, 0.82, 0.5, 0.2);
+  }
+  g.end();
+}
+
 /* ----------------------------------------------------------------- loop */
 let last = performance.now(), ema = 1 / 60, slow = 0;
 function frame(now) {
@@ -870,7 +1031,15 @@ function frame(now) {
   const rdt = Math.min(0.05, (now - last) / 1000); last = now;
   if (rdt <= 0) return;
   ema = ema * 0.95 + rdt * 0.05;
-  if (ema > 0.026 && dpr > 1) { slow++; if (slow > 60) { dpr = Math.max(1, dpr - 0.25); resize(); slow = 0; ema = 1 / 60; } } else slow = 0;
+  if (ema > 0.026 && !HQ) {
+    slow++;
+    if (slow > 70) {
+      if (shadowsOn && dpr <= 1.25) { shadowsOn = false; sun.castShadow = false; }
+      else if (dpr > 1) { dpr = Math.max(1, dpr - 0.25); resize(); }
+      else if (shadowsOn) { shadowsOn = false; sun.castShadow = false; }
+      slow = 0; ema = 1 / 60;
+    }
+  } else slow = 0;
   update(rdt);
   if (S.world) { updateCamera(rdt * (S.paused ? 0 : 1), rdt); renderer.render(scene, camera); }
 }
@@ -887,6 +1056,7 @@ function update(rdt) {
     fx.update(dt);
     updateLamps(false);
     for (const c of S.cars) if (c.root.visible && !c.gone) syncCar(c);
+    updateGlows();
     updateArrow();
     S.shake *= Math.exp(-4.5 * rdt);
 
@@ -924,6 +1094,6 @@ requestAnimationFrame(frame);
 export function boot() {
   loadLevel(Math.min(save.last || 0, LEVELS.length - 1));
   toMenu('title');
-  window.__cj = { update, S, save, startLevel, startPower, doLaunch, crashBreaker, LEVELS, toMenu, scene, camera, renderer };
+  window.__cj = { get shadows() { return shadowsOn; }, update, S, save, startLevel, startPower, doLaunch, crashBreaker, LEVELS, toMenu, scene, camera, renderer };
   const l = document.getElementById('boot'); if (l) l.remove();
 }
