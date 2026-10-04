@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>CRASH JUNCTION</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon.svg">
+<link rel="apple-touch-icon" href="icons/icon.svg">
+<style>
+:root{--y:#ffd500;--r:#e8202a;--k:#101114;--g:#22c55e;--sa:env(safe-area-inset-top,0px);--sb:env(safe-area-inset-bottom,0px);--sl:env(safe-area-inset-left,0px);--sr:env(safe-area-inset-right,0px)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:"Arial Black","Impact",system-ui,sans-serif;color:#fff;touch-action:none;overscroll-behavior:none}
+#app{position:fixed;inset:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.hidden{display:none!important}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:calc(var(--sa) + 14px) calc(var(--sr) + 14px) calc(var(--sb) + 14px) calc(var(--sl) + 14px);background:radial-gradient(ellipse at center,rgba(0,0,0,.15),rgba(0,0,0,.72));gap:12px}
+.logo{font-size:min(15vw,78px);line-height:.88;text-align:center;font-style:italic;letter-spacing:-1px;text-transform:uppercase;text-shadow:0 4px 0 #000,0 0 30px rgba(255,80,0,.55)}
+.logo b{display:block;color:var(--y)}
+.logo i{display:block;color:var(--r);font-size:.62em;-webkit-text-stroke:0}
+.tag{font-size:12px;letter-spacing:3px;opacity:.85;text-shadow:0 2px 0 #000}
+.btn{appearance:none;border:0;cursor:pointer;font:inherit;font-size:20px;font-style:italic;text-transform:uppercase;color:#111;background:var(--y);padding:14px 30px;transform:skewX(-10deg);box-shadow:0 5px 0 #8a6f00,0 8px 18px rgba(0,0,0,.5);min-width:220px;letter-spacing:1px}
+.btn:active{transform:skewX(-10deg) translateY(4px);box-shadow:0 1px 0 #8a6f00}
+.btn.red{background:var(--r);color:#fff;box-shadow:0 5px 0 #7d0f15,0 8px 18px rgba(0,0,0,.5)}
+.btn.dark{background:#2a2c33;color:#fff;box-shadow:0 5px 0 #000,0 8px 18px rgba(0,0,0,.5)}
+.btn.small{font-size:14px;padding:9px 16px;min-width:0}
+.btn[disabled]{filter:grayscale(1) brightness(.6);pointer-events:none}
+.row{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap}
+.money{font-size:22px;color:var(--y);text-shadow:0 2px 0 #000}
+h2{margin:0;font-size:28px;font-style:italic;text-transform:uppercase;text-shadow:0 3px 0 #000}
+.list{width:min(560px,100%);display:flex;flex-direction:column;gap:9px;overflow:auto;max-height:calc(100% - 130px);padding:4px 2px;-webkit-overflow-scrolling:touch;touch-action:pan-y}
+.card{display:flex;align-items:center;gap:12px;background:linear-gradient(90deg,#1b1d24,#2a2d37);border-left:6px solid var(--y);padding:11px 14px;transform:skewX(-4deg);box-shadow:0 4px 0 #000;cursor:pointer}
+.card>*{transform:skewX(4deg)}
+.card.locked{opacity:.45;border-color:#555;pointer-events:none}
+.card .n{font-size:30px;color:var(--y);width:34px;text-align:center}
+.card .t{flex:1}.card .t b{display:block;font-size:17px;font-style:italic}.card .t small{font-family:system-ui,sans-serif;font-weight:600;opacity:.7;font-size:12px}
+.medals{font-size:20px;letter-spacing:2px;white-space:nowrap}
+.medal{opacity:.2;filter:grayscale(1)}.medal.on{opacity:1;filter:none}
+.up{display:flex;align-items:center;gap:10px;background:#1b1d24;padding:10px 12px;border-left:6px solid var(--r);transform:skewX(-4deg);box-shadow:0 4px 0 #000}
+.up>*{transform:skewX(4deg)}
+.up .t{flex:1}.up .t b{font-size:15px;font-style:italic;display:block}.up .t small{font:600 11px system-ui,sans-serif;opacity:.7}
+.pips{display:flex;gap:3px;margin-top:5px}.pips i{width:16px;height:7px;background:#444;display:block;transform:skewX(-20deg)}.pips i.on{background:var(--y)}
+.sw{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.sw i{width:34px;height:34px;border:3px solid #000;box-shadow:0 0 0 2px #555;cursor:pointer;transform:skewX(-8deg)}
+.sw i.sel{box-shadow:0 0 0 3px var(--y)}
+.chip{padding:8px 12px;background:#1b1d24;border:2px solid #444;font-size:12px;cursor:pointer;transform:skewX(-8deg);text-align:center}
+.chip.sel{border-color:var(--y);background:#3a3200}.chip small{display:block;font:600 10px system-ui,sans-serif;opacity:.75}
+/* HUD */
+#hud{position:absolute;inset:0;pointer-events:none}
+#hud>*{position:absolute}
+#top{left:calc(var(--sl) + 10px);right:calc(var(--sr) + 10px);top:calc(var(--sa) + 8px);display:flex;align-items:center;gap:10px;justify-content:space-between}
+#lvlName{font-size:12px;letter-spacing:2px;text-shadow:0 2px 0 #000;opacity:.9;flex:1;text-align:center}
+#cars{display:flex;gap:5px}#cars i{width:22px;height:12px;background:var(--y);transform:skewX(-20deg);box-shadow:0 2px 0 #000}#cars i.used{background:#444}
+#pauseBtn{pointer-events:auto;width:40px;height:40px;background:#000a;border:2px solid #fff6;color:#fff;font-size:15px;transform:skewX(-8deg)}
+#score{left:0;right:0;top:calc(var(--sa) + 46px);text-align:center;font-size:min(13vw,58px,9vh);font-style:italic;color:var(--y);text-shadow:0 4px 0 #000,0 0 22px rgba(0,0,0,.6);letter-spacing:-1px}
+#goal{left:50%;transform:translateX(-50%);top:calc(var(--sa) + 112px);width:min(300px,70vw);height:12px;background:#000a;border:2px solid #000;transform-origin:center}
+#goal>div{height:100%;width:0;background:linear-gradient(90deg,#c0742b,#e0e0e8,#ffd500)}
+#goal i{position:absolute;top:-4px;bottom:-4px;width:3px;background:#fff}
+#mult{left:0;right:0;top:calc(var(--sa) + 134px);text-align:center;font-size:min(10vw,42px);font-style:italic;color:#fff;text-shadow:0 3px 0 var(--r),0 0 18px rgba(232,32,42,.9);transition:transform .1s}
+#mult.pulse{transform:scale(1.35)}
+#chainbar{left:50%;transform:translateX(-50%);top:calc(var(--sa) + 182px);width:140px;height:6px;background:#0008}
+#chainbar>div{height:100%;background:var(--r);width:0}
+#after{left:calc(var(--sl) + 12px);top:50%;width:12px;height:150px;background:#000a;border:2px solid #000;transform:translateY(-50%)}
+#after>div{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(#22c55e,#a3e635);height:100%}
+#afterLbl{left:calc(var(--sl) + 4px);top:calc(50% + 86px);font-size:9px;letter-spacing:1px;text-shadow:0 1px 0 #000}
+#pops{inset:0;overflow:hidden}
+.pop{position:absolute;left:0;top:0;white-space:nowrap;font-style:italic;font-size:22px;color:#fff;text-shadow:0 3px 0 #000,0 0 10px #000;will-change:transform,opacity;animation:pop 1.2s ease-out forwards;pointer-events:none}
+.pop.big{font-size:34px;color:var(--y)}.pop.fire{color:#ff8a1f;font-size:32px}.pop.coin{color:#7dff9d}
+@keyframes pop{0%{opacity:0;margin-top:0;scale:.4}12%{opacity:1;scale:1.25}25%{scale:1}100%{opacity:0;margin-top:-70px}}
+#hint{left:0;right:0;bottom:calc(var(--sb) + 130px);text-align:center;font-size:14px;letter-spacing:2px;text-shadow:0 2px 0 #000;animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.35}}
+#launchBtn,#stopBtn{pointer-events:auto;left:50%;bottom:calc(var(--sb) + 40px);transform:translateX(-50%) skewX(-10deg);font-size:26px;padding:18px 46px}
+#launchBtn:active,#stopBtn:active{transform:translateX(-50%) skewX(-10deg) translateY(4px)}
+#gauge{left:50%;bottom:calc(var(--sb) + 120px);transform:translateX(-50%);width:min(320px,82vw);height:30px;background:#000b;border:3px solid #000;overflow:hidden;transform:translateX(-50%) skewX(-10deg)}
+#gauge .z{position:absolute;top:0;bottom:0}
+#gauge #needle{position:absolute;top:-2px;bottom:-2px;width:6px;background:#fff;box-shadow:0 0 8px #fff;left:0}
+#breakBtn{pointer-events:auto;right:calc(var(--sr) + 14px);bottom:calc(var(--sb) + 26px);width:104px;height:104px;border-radius:50%;border:5px solid #000;background:radial-gradient(circle at 35% 30%,#ff7b5a,#d1111b 60%,#7a0a10);color:#fff;font-size:13px;line-height:1.05;font-style:italic;box-shadow:0 6px 0 #000;opacity:.35;filter:grayscale(.7)}
+#breakBtn.ready{opacity:1;filter:none;animation:pulseB .5s infinite alternate}
+@keyframes pulseB{to{transform:scale(1.1);box-shadow:0 6px 0 #000,0 0 30px #ff3b1f}}
+#stick{width:120px;height:120px;border-radius:50%;border:3px solid #fff7;background:#fff2;display:none;margin:-60px 0 0 -60px}
+#knob{position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px;border-radius:50%;background:#fffc;box-shadow:0 2px 6px #000a}
+#flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+#tally{left:0;right:0;top:34%;text-align:center;font-style:italic;font-size:min(9vw,36px);text-shadow:0 4px 0 #000}
+#tally b{display:block;font-size:min(16vw,70px);color:var(--y)}
+#toast{left:0;right:0;top:28%;text-align:center;font-size:min(7vw,30px);font-style:italic;color:#fff;text-shadow:0 3px 0 var(--r),0 0 20px #000}
+.big{font-size:min(14vw,64px)}
+.res{width:min(420px,100%);background:#14161bee;border-top:6px solid var(--y);padding:18px;transform:skewX(-3deg);box-shadow:0 8px 0 #000;display:flex;flex-direction:column;gap:10px;align-items:center}
+.res>*{transform:skewX(3deg)}
+.res .medalbig{font-size:64px;line-height:1}
+.res table{width:100%;font:700 15px system-ui,sans-serif;border-collapse:collapse}.res td{padding:3px 0}.res td:last-child{text-align:right;color:var(--y)}
+#rot{display:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="c"></canvas>
+  <div id="flash"></div>
+
+  <div id="hud" class="hidden">
+    <div id="top"><div id="cars"></div><div id="lvlName"></div><button id="pauseBtn">❚❚</button></div>
+    <div id="score">$0</div>
+    <div id="goal"><div></div><i style="left:33%"></i><i style="left:66%"></i></div>
+    <div id="mult"></div>
+    <div id="chainbar"><div></div></div>
+    <div id="after"><div></div></div><div id="afterLbl">AFTERTOUCH</div>
+    <div id="pops"></div>
+    <div id="hint"></div>
+    <div id="toast"></div>
+    <div id="tally"></div>
+    <div id="gauge"></div>
+    <button id="launchBtn" class="btn red">LAUNCH!</button>
+    <button id="stopBtn" class="btn red hidden">STOPP!</button>
+    <button id="breakBtn">CRASH<br>BREAKER</button>
+    <div id="stick"><div id="knob"></div></div>
+  </div>
+
+  <div id="title" class="screen">
+    <div class="logo"><b>CRASH</b><i>JUNCTION</i></div>
+    <div class="tag">VERKEHR · CHAOS · KOHLE</div>
+    <div style="height:14px"></div>
+    <button class="btn" id="playBtn">SPIELEN</button>
+    <button class="btn dark" id="garageBtn">GARAGE</button>
+    <div class="row"><div class="money" id="titleMoney"></div></div>
+    <button class="btn dark small" id="soundBtn">SOUND AN</button>
+  </div>
+
+  <div id="levels" class="screen hidden">
+    <h2>Kreuzung wählen</h2><div class="money lvMoney"></div>
+    <div class="list" id="lvlList"></div>
+    <button class="btn dark small" data-back>ZURÜCK</button>
+  </div>
+
+  <div id="garage" class="screen hidden" style="justify-content:flex-end">
+    <h2>Garage</h2><div class="money lvMoney"></div>
+    <div class="list" id="garList" style="max-height:52%"></div>
+    <button class="btn dark small" data-back>ZURÜCK</button>
+  </div>
+
+  <div id="pause" class="screen hidden">
+    <h2 class="big">PAUSE</h2>
+    <button class="btn" id="resumeBtn">WEITER</button>
+    <button class="btn dark" id="restartBtn">NEUSTART</button>
+    <button class="btn dark" id="quitBtn">MENÜ</button>
+  </div>
+
+  <div id="results" class="screen hidden"></div>
+</div>
+<script type="module" src="game.js"></script>
+<script>if('serviceWorker' in navigator&&location.protocol.startsWith('http')){addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}</script>
+</body>
+</html>

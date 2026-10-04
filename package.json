@@ -1,0 +1,14 @@
+{
+  "name": "crash-junction",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --minify --format=esm --target=es2019 --outfile=game.js",
+    "dev": "esbuild src/main.js --bundle --format=esm --outfile=game.js --watch --servedir=. "
+  },
+  "dependencies": {
+    "esbuild": "^0.28.2",
+    "three": "^0.186.1"
+  }
+}
