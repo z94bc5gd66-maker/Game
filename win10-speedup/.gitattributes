@@ -1,0 +1,3 @@
+# Bytes unveraendert lassen (UTF-8-BOM im .ps1, CRLF in .bat/.ps1), damit PowerShell 5.1 und cmd sie korrekt lesen
+*.ps1 -text
+*.bat -text
