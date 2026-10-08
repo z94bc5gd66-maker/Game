@@ -14,8 +14,8 @@ Millisekunden sucht, so wie die Windows-7-Suche früher.
 
 | Menüpunkt | Was passiert |
 |---|---|
-| [1] Auswahlmenü | Liste mit 25 Tweaks, du schaltest ein und aus |
-| [2] Nur schnelle Suche | Installiert nur Everything und die Toolbar und schaltet die Windows-Suche ab |
+| [1] Auswahlmenü | Liste mit 27 Tweaks, du schaltest ein und aus |
+| [2] Nur schnelle Suche | Everything, Toolbar und Win+S-Umleitung installieren, Windows-Suche abschalten |
 | [3] Automatisch | Alle "sicheren" und "harten" Tweaks ohne Rückfragen |
 | [4] Rückgängig | Dreht alles zurück, was das Skript geändert hat |
 
@@ -39,7 +39,7 @@ Direkt aus PowerShell geht es auch: `.\Win10-Speedup.ps1 -Mode Safe`, `-NoMenu`,
 - Temp-Ordner und Update-Cache aufräumen.
 - **Schnelle Suche** (siehe unten).
 
-**Hart** (nur im Modus Max vorausgewählt): Xbox-Apps und Game Bar entfernen, Mail, Kalender und Sticky Notes entfernen, OneDrive deinstallieren, alte Features entfernen (IE11, PowerShell 2, SMB1, Fax, XPS, WMP), Ruhezustand und Schnellstart aus, Standortdienste aus, UPnP und Hotspot aus, Brave-Richtlinien (Rewards, Wallet, VPN, KI-Chat, Metriken), DISM-Bereinigung.
+**Hart** (nur im Modus Max vorausgewählt): Xbox-Apps und Game Bar entfernen, Mail, Kalender und Sticky Notes entfernen, OneDrive deinstallieren, alte Features entfernen (IE11, PowerShell 2, SMB1, Fax, XPS, WMP), Ruhezustand und Schnellstart aus, Standortdienste aus, UPnP und Hotspot aus, Brave-Richtlinien (Rewards, Wallet, VPN, KI-Chat, Metriken), DISM-Bereinigung, feste Auslagerungsdatei mit Speicherkomprimierung (Nr. 24, siehe unten) und Win+S auf die Taskleisten-Suche (Nr. 25).
 
 **Riskant** (nie vorausgewählt): Edge deinstallieren (nicht umkehrbar), Druckwarteschlange abschalten.
 
@@ -57,7 +57,9 @@ Installiert per `winget` zwei Pakete: `voidtools.Everything` und `srwi.Everythin
 - Zwei Startmenü-Einträge: **"Neue Dateien (heute)"** und **"Neue Dateien (7 Tage)"**. Sie zeigen zuletzt erstellte Dateien, neueste zuerst.
 - Die Windows-Suche (`WSearch`) wird **erst abgeschaltet, wenn beide Pakete nachweislich installiert sind**. Sonst bleibt sie an.
 
-**Einmal von Hand:** Rechtsklick auf die Taskleiste → **Symbolleisten → EverythingToolbar** (ggf. zweimal öffnen). Mit entsperrter Taskleiste kannst du die Leiste in Größe und Position anpassen. Fokus auf die Suchleiste: **Win + Alt + S**.
+**Einmal von Hand:** Rechtsklick auf die Taskleiste (die "Startleiste" mit dem Startknopf) → **Symbolleisten → EverythingToolbar** (ggf. zweimal öffnen). Die Suchleiste erscheint dann in der Taskleiste. Mit entsperrter Taskleiste ziehst du sie direkt neben den Startknopf und passt die Breite an. Das Windows-Suchfeld ist ab dann weg (Tweak 3).
+
+**Tastenkürzel:** Die Toolbar bringt **Win + Alt + S** mit. Tweak 25 installiert zusätzlich AutoHotkey und biegt **Win + S** darauf um. Die Win-Taste allein öffnet weiter das normale Startmenü. Dessen Suchfeld liefert ohne den Windows-Suchdienst allerdings kaum noch Treffer, für Suchen nimmst du also die Toolbar.
 
 ### Suchsyntax (Everything)
 
@@ -76,6 +78,24 @@ Installiert per `winget` zwei Pakete: `voidtools.Everything` und `srwi.Everythin
 
 Nach "Datum erstellt" sortierst du per Klick auf die Spaltenüberschrift. Falls das langsam ist, in Everything unter *Extras → Optionen → Indizes* **Erstellungsdatum** indizieren und unter *Schnellsortierung* aktivieren. Das Skript versucht das schon in der `Everything.ini` zu setzen.
 
+## Swap unter Windows: Auslagerungsdatei
+
+Windows hat das Gegenstück zum Linux-Swap schon eingebaut: die **Auslagerungsdatei** `pagefile.sys`. Dazu kommt die **Speicherkomprimierung**, das Gegenstück zu zram. Windows komprimiert dabei selten genutzte RAM-Seiten, bevor es überhaupt auf die Platte auslagert.
+
+Was Swap kann und was nicht:
+- Er ist **kein schneller Ersatz für RAM**. Eine SSD braucht für einen Zugriff Mikrosekunden, RAM Nanosekunden, das ist ein Faktor von etwa hundert. Läuft Windows dauernd im Swap, wird alles zäh.
+- Er schützt vor **Abstürzen bei vollem RAM** und lässt Windows ungenutzte Seiten auslagern. Das gewonnene RAM nutzt es als Dateicache, und genau das macht Dateioperationen schneller.
+- Eine Auslagerungsdatei abzuschalten bringt nichts und führt zu Abstürzen und fehlenden Absturzberichten. Das Skript tut es nie.
+
+**Tweak 24** macht Folgendes:
+- Die Datei bekommt eine **feste Größe** (Start = Maximum) auf dem Systemlaufwerk, also auf deiner SSD. Bis 8 GB RAM sind das 1,5 × RAM, darüber 1 × RAM, immer zwischen 4 und 16 GB. Eine feste Größe verhindert Wachsen und Schrumpfen zur Laufzeit, die Fragmentierung und die Ruckler dabei.
+- Die **Speicherkomprimierung** wird eingeschaltet, falls sie aus ist.
+- **TRIM** wird geprüft und bei Bedarf eingeschaltet. Das hält die SSD schnell.
+- Das Skript legt die Datei nur an, wenn mindestens 10 GB Reserve auf dem Laufwerk bleiben.
+- Die Änderung wirkt nach dem Neustart. `-Undo` stellt die automatische Verwaltung wieder her.
+
+Wenn dein Windows trotzdem ständig im Swap hängt, hilft nur **mehr RAM**. Im Task-Manager unter *Leistung → Arbeitsspeicher* siehst du, wie voll er ist.
+
 ## Rückgängig machen
 
 - **START.bat → [4]** oder `.\Win10-Speedup.ps1 -Undo` stellt alle Registry-Werte, Dienst-Startmodi, Aufgaben, Features, den Energieplan und angelegte Verknüpfungen auf den **Originalzustand** zurück. Gemerkt wird immer der Wert von vor dem allerersten Lauf.
@@ -87,7 +107,7 @@ Nach "Datum erstellt" sortierst du per Klick auf die Spaltenüberschrift. Falls 
 
 - **Das Skript wurde auf Linux geschrieben und geprüft** (PowerShell-Parser, Tests der Hilfsfunktionen wie INI-/JSON-Bearbeitung, Zustandsdatei und Menülogik). Ein echter Lauf auf Windows 10 ist **nicht** erfolgt. Deshalb: erst Wiederherstellungspunkt (macht das Skript), dann ausprobieren, und die Ausgabe am Ende lesen. Warnungen werden dort gesammelt.
 - Einige Everything-Kommandozeilenoptionen (`-install-service`, `-sort "Date Created"`) konnte ich nicht gegen die Doku prüfen (voidtools.com war aus meiner Umgebung nicht erreichbar). Das Skript prüft nach, ob der Dienst existiert, und nutzt sonst einen Fallback. Sollte eine Verknüpfung "Neue Dateien" nicht sortiert öffnen, ist nur die Sortierung betroffen, nicht die Suche.
-- Die Toolbar ersetzt **nicht** die Tastenkombination Win+S. Sie bringt eine eigene Leiste in der Taskleiste und eigene Tastenkürzel mit.
+- Die Win+S-Umleitung (Tweak 25) nutzt AutoHotkey v2. Den genauen Installationspfad habe ich nicht belegt, das Skript sucht die `AutoHotkey64.exe` selbst und warnt, wenn es sie nicht findet. Die Taste funktioniert nur, wenn die Toolbar in der Taskleiste aktiviert ist.
 - Ein Gewinn bei Boot und RAM ist realistisch, "doppelt so schnell" nicht. Der größte Effekt kommt von den Animationen und der Transparenz, den Hintergrund-Apps und dem Autostart.
 - Läuft das Skript unter einem anderen Admin-Konto als dem, mit dem du angemeldet bist, gelten die Benutzer-Tweaks (HKCU) für das Admin-Konto. Am besten startest du es als dein eigener Benutzer mit Adminrechten.
 - Brave nutzt nach Tweak 22 Richtlinien und zeigt "Wird von deiner Organisation verwaltet". Das ist nur der Hinweis auf die Richtlinie.

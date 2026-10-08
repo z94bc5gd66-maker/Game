@@ -266,6 +266,16 @@ function Confirm-YesNo {
     return ($a.Trim().ToLower() -in @('j', 'ja', 'y', 'yes'))
 }
 
+# Liefert SSD / HDD / Unspecified / Unknown fuer das Systemlaufwerk
+function Get-SystemDiskType {
+    try {
+        $part = Get-Partition -DriveLetter ($env:SystemDrive.TrimEnd(':')) -ErrorAction Stop
+        $disk = Get-PhysicalDisk -ErrorAction Stop | Where-Object { $_.DeviceId -eq [string]$part.DiskNumber } | Select-Object -First 1
+        if ($disk) { return [string]$disk.MediaType }
+    } catch { }
+    return 'Unknown'
+}
+
 function New-Shortcut {
     param([string]$Path, [string]$Target, [string]$Arguments = '', [string]$Description = '')
     try {
@@ -462,16 +472,10 @@ function Invoke-TweakServices {
     }
     Set-ServiceStart 'DoSvc' Manual
     # SysMain (Superfetch) nur auf SSD sinnvoll abschalten
-    try {
-        $part = Get-Partition -DriveLetter ($env:SystemDrive.TrimEnd(':')) -ErrorAction Stop
-        $disk = Get-PhysicalDisk -ErrorAction Stop | Where-Object { $_.DeviceId -eq [string]$part.DiskNumber } | Select-Object -First 1
-        if ($disk -and $disk.MediaType -eq 'SSD') {
-            Set-ServiceStart 'SysMain' Disabled -Stop
-        } else {
-            Write-Info 'SysMain (Superfetch) bleibt an: Systemlaufwerk ist keine erkannte SSD.'
-        }
-    } catch {
-        Write-Info 'Laufwerkstyp nicht erkannt - SysMain bleibt unveraendert.'
+    if ((Get-SystemDiskType) -eq 'SSD') {
+        Set-ServiceStart 'SysMain' Disabled -Stop
+    } else {
+        Write-Info 'SysMain (Superfetch) bleibt an: Systemlaufwerk ist keine erkannte SSD.'
     }
 }
 
@@ -825,6 +829,102 @@ function Invoke-TweakFastSearch {
     Write-Host '  (ggf. zweimal oeffnen). Tastenkuerzel zum Fokussieren: Win + Alt + S.' -ForegroundColor Cyan
 }
 
+# ----------------------------------------------------------------------------
+# Auslagerungsdatei (= Windows-"Swap"), Speicherkomprimierung (= zram), TRIM
+# ----------------------------------------------------------------------------
+function Invoke-TweakPagefile {
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $ramMB = [int][Math]::Round($cs.TotalPhysicalMemory / 1MB)
+    $drive = $env:SystemDrive
+    $type = Get-SystemDiskType
+    if ($type -ne 'SSD') { Write-Info "Systemlaufwerk als '$type' erkannt (nicht SSD) - Auslagerungsdatei bleibt auf $drive." }
+
+    # Feste Groesse (Start = Maximum): kein Wachsen/Schrumpfen, keine Fragmentierung, keine Ruckler.
+    # <= 8 GB RAM: 1,5 x RAM, darueber 1 x RAM, immer zwischen 4 und 16 GB.
+    $factor = if ($ramMB -le 8192) { 1.5 } else { 1.0 }
+    $sizeMB = [int][Math]::Min([Math]::Max($ramMB * $factor, 4096), 16384)
+    $freeMB = [int]((Get-PSDrive -Name ($drive.TrimEnd(':'))).Free / 1MB)
+    if ($freeMB -lt ($sizeMB + 10240)) {
+        Add-Warn "Zu wenig freier Platz auf $drive ($freeMB MB frei, $sizeMB MB noetig + 10 GB Reserve) - Auslagerungsdatei unveraendert."
+    } else {
+        $prev = @(Get-CimInstance Win32_PageFileSetting -ErrorAction SilentlyContinue | ForEach-Object {
+                @{ Name = $_.Name; Initial = [int]$_.InitialSize; Max = [int]$_.MaximumSize } })
+        Add-StateItem 'PAGEFILE' @{ Kind = 'Pagefile'; Auto = [bool]$cs.AutomaticManagedPagefile; Settings = $prev }
+        try {
+            Set-CimInstance -InputObject $cs -Property @{ AutomaticManagedPagefile = $false } -ErrorAction Stop
+            $path = "$drive\pagefile.sys"
+            $pf = Get-CimInstance Win32_PageFileSetting -Filter ("Name='" + $path.Replace('\', '\\') + "'") -ErrorAction SilentlyContinue
+            if ($pf) {
+                Set-CimInstance -InputObject $pf -Property @{ InitialSize = [uint32]$sizeMB; MaximumSize = [uint32]$sizeMB } -ErrorAction Stop
+            } else {
+                New-CimInstance -ClassName Win32_PageFileSetting -Property @{ Name = $path; InitialSize = [uint32]$sizeMB; MaximumSize = [uint32]$sizeMB } -ErrorAction Stop | Out-Null
+            }
+            Write-Info ("Auslagerungsdatei: fest {0} MB auf {1} (RAM: {2} MB) - wirkt nach dem Neustart." -f $sizeMB, $drive, $ramMB)
+        } catch {
+            Add-Warn "Auslagerungsdatei: $($_.Exception.Message) - stelle automatische Verwaltung wieder her."
+            try { Set-CimInstance -InputObject $cs -Property @{ AutomaticManagedPagefile = $true } -ErrorAction Stop } catch { }
+        }
+    }
+
+    # Speicherkomprimierung: Windows komprimiert selten genutzte RAM-Seiten, bevor es auf die Platte auslagert
+    try {
+        $mm = Get-MMAgent -ErrorAction Stop
+        Add-StateItem 'MMAGENT' @{ Kind = 'MMAgent'; Compression = [bool]$mm.MemoryCompression }
+        if ($mm.MemoryCompression) {
+            Write-Info 'Speicherkomprimierung ist aktiv (das Windows-Gegenstueck zu zram).'
+        } else {
+            Enable-MMAgent -MemoryCompression -ErrorAction Stop
+            Write-Info 'Speicherkomprimierung eingeschaltet (nach Neustart aktiv).'
+        }
+    } catch {
+        Add-Warn "Speicherkomprimierung: $($_.Exception.Message)"
+    }
+
+    # TRIM: haelt die SSD schnell. Windows hat es normalerweise an - wir pruefen nur.
+    if ($type -ne 'HDD') {
+        $q = (& fsutil behavior query DisableDeleteNotify 2>&1) -join ' '
+        if ($q -match 'NTFS\s+DisableDeleteNotify\s*=\s*1') {
+            & fsutil behavior set DisableDeleteNotify 0 | Out-Null
+            Write-Info 'TRIM war aus und ist jetzt an.'
+        } elseif ($q -match 'DisableDeleteNotify\s*=\s*0') {
+            Write-Info 'TRIM ist aktiv.'
+        }
+    }
+}
+
+# ----------------------------------------------------------------------------
+# Win+S -> EverythingToolbar (per AutoHotkey v2)
+# ----------------------------------------------------------------------------
+function Invoke-TweakWinS {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Add-Warn 'winget fehlt - Win+S-Umleitung uebersprungen.'; return }
+    if (-not (Test-WingetPackage 'srwi.EverythingToolbar.Deskband')) {
+        Add-Warn 'Win+S-Umleitung braucht die EverythingToolbar - zuerst "Schnelle Suche" ausfuehren.'
+        return
+    }
+    if (-not (Install-WingetPackage 'AutoHotkey.AutoHotkey')) { return }
+    $ahk = $null
+    foreach ($c in "$env:ProgramFiles\AutoHotkey\v2\AutoHotkey64.exe", "$env:ProgramFiles\AutoHotkey\v2\AutoHotkey.exe",
+        "$env:LOCALAPPDATA\Programs\AutoHotkey\v2\AutoHotkey64.exe") {
+        if (Test-Path -LiteralPath $c) { $ahk = $c; break }
+    }
+    if (-not $ahk -and (Test-Path -LiteralPath "$env:ProgramFiles\AutoHotkey")) {
+        $ahk = (Get-ChildItem -LiteralPath "$env:ProgramFiles\AutoHotkey" -Recurse -Filter 'AutoHotkey64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+    }
+    if (-not $ahk) { Add-Warn 'AutoHotkey v2 installiert, aber AutoHotkey64.exe nicht gefunden.'; return }
+
+    $ahkScript = Join-Path $script:StateDir 'WinS-to-EverythingToolbar.ahk'
+    $code = "#Requires AutoHotkey v2.0`r`n#SingleInstance Force`r`n; Win+S oeffnet die EverythingToolbar (sendet deren Kuerzel Win+Alt+S)`r`n`$#s::Send(`"{Blind}!s`")`r`n"
+    [IO.File]::WriteAllText($ahkScript, $code, (New-Object Text.UTF8Encoding $false))
+    Add-StateItem "FILE|$ahkScript" @{ Kind = 'File'; Path = $ahkScript }
+    $lnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Startup\Win+S Schnellsuche.lnk'
+    if (New-Shortcut $lnk $ahk ('"{0}"' -f $ahkScript) 'Win+S oeffnet die EverythingToolbar') {
+        Get-Process -Name 'AutoHotkey*' -ErrorAction SilentlyContinue | Stop-Process -Force
+        Start-Process -FilePath 'explorer.exe' -ArgumentList ('"{0}"' -f $lnk)
+        Write-Info 'Win+S oeffnet jetzt die Toolbar-Suchleiste (setzt voraus, dass die Toolbar in der Taskleiste aktiviert ist).'
+    }
+}
+
+
 # ============================================================================
 # Katalog + Menue
 # ============================================================================
@@ -853,8 +953,10 @@ $script:Catalog = @(
     @{ Id = 21; Level = 2; Fn = 'Invoke-TweakNetSvc'; Title = 'UPnP/SSDP, Internetfreigabe & Mobile Hotspot aus' },
     @{ Id = 22; Level = 2; Fn = 'Invoke-TweakBrave'; Title = 'Brave: Rewards, Wallet, VPN, KI-Chat & Metriken per Richtlinie aus' },
     @{ Id = 23; Level = 2; Fn = 'Invoke-TweakDism'; Title = 'Windows-Komponentenspeicher bereinigen (DISM, dauert)' },
-    @{ Id = 24; Level = 3; Fn = 'Invoke-TweakEdgeRemove'; Title = 'Microsoft Edge deinstallieren (nicht umkehrbar)' },
-    @{ Id = 25; Level = 3; Fn = 'Invoke-TweakSpooler'; Title = 'Druckwarteschlange abschalten (nur wenn du NIE druckst)' }
+    @{ Id = 24; Level = 2; Fn = 'Invoke-TweakPagefile'; Title = 'SSD-"Swap": feste Auslagerungsdatei, Speicherkomprimierung, TRIM-Check' },
+    @{ Id = 25; Level = 2; Order = 101; Fn = 'Invoke-TweakWinS'; Title = 'Win+S oeffnet die Taskleisten-Suche (AutoHotkey, nach "Schnelle Suche")' },
+    @{ Id = 26; Level = 3; Fn = 'Invoke-TweakEdgeRemove'; Title = 'Microsoft Edge deinstallieren (nicht umkehrbar)' },
+    @{ Id = 27; Level = 3; Fn = 'Invoke-TweakSpooler'; Title = 'Druckwarteschlange abschalten (nur wenn du NIE druckst)' }
 )
 
 function Get-DefaultSelection {
@@ -943,6 +1045,24 @@ function Restore-StateItem($r) {
                 Remove-Item -LiteralPath $r.Path -Force -ErrorAction SilentlyContinue
             }
         }
+        'Pagefile' {
+            $cs = Get-CimInstance Win32_ComputerSystem
+            if ($r.Auto) {
+                Set-CimInstance -InputObject $cs -Property @{ AutomaticManagedPagefile = $true }
+            } else {
+                Set-CimInstance -InputObject $cs -Property @{ AutomaticManagedPagefile = $false }
+                $keep = @($r.Settings)
+                foreach ($cur in @(Get-CimInstance Win32_PageFileSetting -ErrorAction SilentlyContinue)) {
+                    if (-not ($keep | Where-Object { $_.Name -eq $cur.Name })) { Remove-CimInstance -InputObject $cur -ErrorAction SilentlyContinue }
+                }
+                foreach ($k in $keep) {
+                    $pf = Get-CimInstance Win32_PageFileSetting -Filter ("Name='" + ([string]$k.Name).Replace('\', '\\') + "'") -ErrorAction SilentlyContinue
+                    if ($pf) { Set-CimInstance -InputObject $pf -Property @{ InitialSize = [uint32]$k.Initial; MaximumSize = [uint32]$k.Max } }
+                    else { New-CimInstance -ClassName Win32_PageFileSetting -Property @{ Name = [string]$k.Name; InitialSize = [uint32]$k.Initial; MaximumSize = [uint32]$k.Max } | Out-Null }
+                }
+            }
+        }
+        'MMAgent' { if (-not $r.Compression) { Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue } }
         'RegisteredTask' { Unregister-ScheduledTask -TaskName $r.Name -Confirm:$false -ErrorAction SilentlyContinue }
     }
 }
@@ -990,7 +1110,7 @@ try {
 
     $selected = @()
     if ($OnlySearch) {
-        $selected = @($script:Catalog | Where-Object { $_.Id -eq 14 })
+        $selected = @($script:Catalog | Where-Object { $_.Id -eq 14 -or $_.Id -eq 25 })
     } else {
         if ($NoMenu) {
             $sel = Get-DefaultSelection
